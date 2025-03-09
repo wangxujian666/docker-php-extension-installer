@@ -1,0 +1,44 @@
+name: Sync to Gitee
+
+on:
+    push:
+        branches: [ master ] # 根据你的主分支名称调整
+    release:
+        types: [created, edited]
+    workflow_dispatch: # 允许手动触发
+
+jobs:
+    sync:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout source code
+              uses: actions/checkout@v3
+              with:
+                  fetch-depth: 0 # 获取所有历史记录和标签
+
+            - name: Setup SSH
+              run: |
+                  mkdir -p ~/.ssh
+                  echo "${{ secrets.GITEE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+                  chmod 600 ~/.ssh/id_rsa
+                  ssh-keyscan gitee.com >> ~/.ssh/known_hosts
+
+            - name: Push to Gitee
+              run: |
+                  git remote add gitee git@gitee.com:jiangehenpi/docker-php-extension-installer.git
+                  git push --all gitee
+                  git push --tags gitee
+
+            - name: Sync releases to Gitee
+              if: github.event_name == 'release'
+              env:
+                  GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+                  RELEASE_TAG: ${{ github.event.release.tag_name }}
+                  RELEASE_NAME: ${{ github.event.release.name }}
+                  RELEASE_BODY: ${{ github.event.release.body }}
+              run: |
+                  # 使用 Gitee API 创建对应的 release
+                  curl -X POST "https://gitee.com/api/v5/repos/jiangehenpi/docker-php-extension-installer/releases" \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: token $GITEE_TOKEN" \
+                    -d "{\"tag_name\":\"$RELEASE_TAG\",\"name\":\"$RELEASE_NAME\",\"body\":\"$RELEASE_BODY\"}"

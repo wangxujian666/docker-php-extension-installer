@@ -601,4 +601,4 @@ See the [`MAINTAINERS.md`](https://github.com/mlocati/docker-php-extension-insta
 ## Do you want to really say thank you?
 
 You can offer me a [monthly coffee](https://github.com/sponsors/mlocati) or a [one-time coffee](https://paypal.me/mlocati) :wink:
-3
+4

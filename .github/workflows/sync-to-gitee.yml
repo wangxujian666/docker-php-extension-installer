@@ -2,43 +2,87 @@ name: Sync to Gitee
 
 on:
     push:
-        branches: [ master ] # 根据你的主分支名称调整
+        branches: [ master ]  # 根据你的主分支名称调整
     release:
-        types: [created, edited]
-    workflow_dispatch: # 允许手动触发
+        types: [created, edited, deleted]
+    workflow_dispatch:
 
 jobs:
     sync:
         runs-on: ubuntu-latest
         steps:
+            # 步骤1：检出 GitHub 仓库代码（包含所有历史记录和标签）
             - name: Checkout source code
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
               with:
-                  fetch-depth: 0 # 获取所有历史记录和标签
-
+                  fetch-depth: 0  # 获取完整历史记录
+            
+            # 步骤2：配置 SSH 密钥（用于代码推送）
             - name: Setup SSH
               run: |
                   mkdir -p ~/.ssh
                   echo "${{ secrets.GITEE_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
                   chmod 600 ~/.ssh/id_rsa
                   ssh-keyscan gitee.com >> ~/.ssh/known_hosts
-
+            
+            # 步骤3：推送代码和标签到 Gitee
             - name: Push to Gitee
               run: |
                   git remote add gitee git@gitee.com:jiangehenpi/docker-php-extension-installer.git
-                  git push --all gitee
-                  git push --tags gitee
-
-            - name: Sync releases to Gitee
+                  git push --all --force gitee
+                  git push --tags --force gitee
+            
+            # 步骤4：同步 Releases（仅在 release 事件触发时执行）
+            - name: Sync Releases to Gitee
               if: github.event_name == 'release'
               env:
                   GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
                   RELEASE_TAG: ${{ github.event.release.tag_name }}
                   RELEASE_NAME: ${{ github.event.release.name }}
                   RELEASE_BODY: ${{ github.event.release.body }}
+                  DRAFT: ${{ github.event.release.draft }}
+                  PRERELEASE: ${{ github.event.release.prerelease }}
               run: |
-                  # 使用 Gitee API 创建对应的 release
-                  curl -X POST "https://gitee.com/api/v5/repos/jiangehenpi/docker-php-extension-installer/releases" \
-                    -H "Content-Type: application/json" \
+                  # 安装依赖工具（jq 用于解析 JSON）
+                  sudo apt-get -qq update && sudo apt-get -qq install -y jq
+                  
+                  # 删除 Gitee 已有的 Release（避免重复创建冲突）
+                  echo "删除 Gitee 旧 Release..."
+                  curl -sL -X DELETE \
+                    "https://gitee.com/api/v5/repos/jiangehenpi/docker-php-extension-installer/releases/tags/$RELEASE_TAG" \
                     -H "Authorization: token $GITEE_TOKEN" \
-                    -d "{\"tag_name\":\"$RELEASE_TAG\",\"name\":\"$RELEASE_NAME\",\"body\":\"$RELEASE_BODY\"}"
+                    || true  # 忽略删除不存在的 Release 时的错误
+                  
+                  # 创建新 Release
+                  echo "创建 Gitee Release..."
+                  response=$(curl -sL -X POST \
+                    "https://gitee.com/api/v5/repos/jiangehenpi/docker-php-extension-installer/releases" \
+                    -H "Authorization: token $GITEE_TOKEN" \
+                    -H "Content-Type: application/json" \
+                    -d "{
+                      \"tag_name\": \"$RELEASE_TAG\",
+                      \"name\": \"$RELEASE_NAME\",
+                      \"body\": \"$RELEASE_BODY\",
+                      \"draft\": $DRAFT,
+                      \"prerelease\": $PRERELEASE
+                    }")
+                  
+                  # 获取 Gitee Release ID（用于附件上传）
+                  gitee_release_id=$(echo "$response" | jq -r '.id')
+                  
+                  # 同步附件（从 GitHub 下载后上传到 Gitee）
+                  echo "同步附件..."
+                  assets_url=${{ github.event.release.assets_url }}
+                  assets=$(curl -sL "$assets_url" | jq -r '.[] | .url')
+                  
+                  for asset_url in $assets; do
+                    # 下载附件
+                    asset_name=$(basename "$asset_url")
+                    curl -sL -O "$asset_url" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}"
+                  
+                    # 上传到 Gitee
+                    curl -sL -X POST \
+                      "https://gitee.com/api/v5/repos/jiangehenpi/docker-php-extension-installer/releases/$gitee_release_id/upload" \
+                      -H "Authorization: token $GITEE_TOKEN" \
+                      -F "file=@$asset_name"
+                  done
